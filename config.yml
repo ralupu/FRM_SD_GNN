@@ -1,0 +1,19 @@
+# config.yml
+# ----------
+# Global hyper-parameters for the FRM + SD pipeline.
+# Edit → run "python main.py --config config.yml"
+
+# Look-back window length for FRM (business days)
+window_days: 63          # ≈ 3 months
+
+# Tail quantile level for Lasso–quantile regression
+tau: 0.05                # 5 %
+
+# Moving-block bootstrap length (days)
+block_len: 10            # ≈ 2 weeks
+
+# Number of bootstrap replications
+n_boot: 300
+
+# Significance threshold for dominance edges
+alpha_sd: 0.05           # 5 % bootstrap p-value

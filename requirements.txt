@@ -1,0 +1,22 @@
+# Core data stack
+pandas>=2.2
+numpy>=1.26
+openpyxl>=3.1          # Excel loader
+
+# Fast Lasso–quantile regression
+asgl>=0.4.0            # C++/OpenMP backend
+
+# Stochastic-dominance tests
+pysdtest==0.0.20        # research-grade SD library
+
+# Parallelism & progress bars
+joblib>=1.4
+tqdm>=4.66
+
+# Misc utilities
+PyYAML>=6.0            # config.yml parser
+networkx>=3.2          # (needed later for graph features)
+
+# Optional, if you plan to build GNN models later
+# torch>=2.2
+# torch-geometric
