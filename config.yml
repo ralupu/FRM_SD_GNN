@@ -1,19 +1,25 @@
 # config.yml
 # ----------
 # Global hyper-parameters for the FRM + SD pipeline.
-# Edit → run "python main.py --config config.yml"
 
-# Look-back window length for FRM (business days)
-window_days: 63          # ≈ 3 months
+# FRM settings
+window_days:   63         # rolling window length for FRM (in days)
+tau:           0.05       # tail quantile for Lasso regression
+step:          5          # step size between windows
+lambda_grid:   [0.001, 0.01, 0.1, 1.0, 10.0]
+n_folds:       2          # CV folds for Lasso penalty selection
+n_jobs:        4          # parallel workers for FRM
 
-# Tail quantile level for Lasso–quantile regression
-tau: 0.05                # 5 %
+# SD test settings
+block_len:     10         # block length for block-bootstrapping in SD test
+n_boot:        200        # bootstrap replications per pairwise test
+alpha_sd:      0.05       # significance level for dominance edges
+ngrid:         100        # number of grid points for ECDF in SD test
 
-# Moving-block bootstrap length (days)
-block_len: 10            # ≈ 2 weeks
+# Bootstrap-history settings (Step 3b)
+H:             21         # look-back length (days) for synthetic histories
+B:             50         # number of bootstrap-history draws
 
-# Number of bootstrap replications
-n_boot: 300
-
-# Significance threshold for dominance edges
-alpha_sd: 0.05           # 5 % bootstrap p-value
+# Label creation settings (Step 7)
+horizon:       5          # forecast horizon (days ahead) for FRM-jump label
+jump_quantile: 0.90       # top quantile threshold for defining a 'jump'

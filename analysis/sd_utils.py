@@ -1,72 +1,89 @@
-"""
-sd_utils.py
------------
-Thin shim around the PySDTest package
-(https://pypi.org/project/pysdtest).
-
-Exposes just one convenience function:
-
-    sd_stat_pvalue(x, y, s=1, nboot=400, **kw)
-
-…which returns (statistic, p_value) and auto-handles
-• pandas Series / NumPy arrays
-• choice of bootstrap vs. subsampling
-• direction of dominance (+ statistic ⇒ x ≻ y).
-
-Any richer analyses (joint tests, plots) can call
-PySDTest directly; import it here so the rest of the
-project never touches library internals.
-"""
-
 from __future__ import annotations
-import numpy as np, pandas as pd
+import numpy as np
+import pandas as pd
 import pysdtest
 
 
-# ╔═══════════════════════════════════════════════════════╗
-# 1. Public helper
-# ╚═══════════════════════════════════════════════════════╝
 def sd_stat_pvalue(
     x,
     y,
     s: int = 1,
-    nboot: int = 400,
+    ngrid: int = 100,
     resampling: str = "bootstrap",
-    random_state: int | None = 42,
-    **kwargs,
+    nboot: int = 200,
+    b1: int | None = None,
+    b2: int | None = None,
+    quiet: bool = True,
+    debug: bool = False,
 ) -> tuple[float, float]:
     """
+    Wrapper for PySDTest's test_sd function.
+
     Parameters
     ----------
-    x, y       : 1-D array-likes (pandas Series, NumPy, list)
-    s          : SD order (1 = FOSD, 2, 3 …)
-    nboot      : # bootstrap / subsample draws
-    resampling : 'bootstrap' | 'subsampling'
-    **kwargs   : forwarded to pysdtest.test_sd (e.g. bsize)
+    x, y         : 1-D array-likes (NumPy arrays, pandas Series)
+    s            : SD order (1=FSD, 2=SSD, etc.)
+    nboot        : number of bootstrap/subsampling draws
+    ngrid        : number of grid points for ECDF evaluation
+    resampling   : 'bootstrap' | 'subsampling' | 'paired bootstrap'
+    b1, b2       : subsample sizes for sample1 and sample2 (only for subsampling)
+    quiet        : if False, prints detailed output from PySDTest
 
     Returns
     -------
-    statistic  : float  (positive ⇒ X dominates Y)
-    p_value    : float  (≤ α → reject H0 of no dominance)
-
-    Notes
-    -----
-    • PySDTest already centres the bootstrap ⇒ valid even
-      under near-crossing distributions (Donald-Hsu, 2016).
-    • If you need joint dominance over many assets or
-      higher-order integrals, call pysdtest functions
-      directly in your notebook / script.
+    stat, pvalue : floats
+        The test statistic and p-value of the SD test.
     """
-    x = np.asarray(x)
-    y = np.asarray(y)
+    # Convert inputs to numpy arrays
+    x_arr = np.asarray(x)
+    y_arr = np.asarray(y)
 
+    # Guard against empty inputs
+    if x_arr.size == 0 or y_arr.size == 0:
+        print("[WARN] sd_stat_pvalue called with empty sample(s); returning NaN result")
+        return float('nan'), float('nan')
+    y_arr = np.asarray(y)
+
+    # Initialize the PySDTest object with the correct signature
     test = pysdtest.test_sd(
-        x,
-        y,
+        sample1=x_arr,
+        sample2=y_arr,
+        ngrid=ngrid,
         s=s,
-        nboot=nboot,
         resampling=resampling,
-        random_state=random_state,
-        **kwargs,
+        b1=b1,
+        b2=b2,
+        nboot=nboot,
+        quiet=quiet,
     )
-    return float(test.statistic), float(test.pvalue)
+
+    # Run the test
+    test.testing()
+
+    # Extract statistic and p-value
+    stat = getattr(test, 'statistic', None)
+    pval = getattr(test, 'pvalue', None)
+
+    if stat is None or pval is None:
+        # fall back to result dictionary if attributes not found
+        result = getattr(test, 'result', {})
+        stat = result.get('statistic') or result.get('test_stat') or 0.0
+        pval = result.get('pvalue') or result.get('p_value') or 1.0
+
+    # Ensure returns are numeric defaults if still None
+    if stat is None:
+        stat = 0.0
+    if pval is None:
+        pval = 1.0
+
+    # Debug for flat/non-rejection cases
+
+    if debug and pval >= 0.999:
+        print("---- SD DEBUG ----")
+        print(f"Order s={s}, nboot={nboot}, resampling={resampling}")
+        print("Sample1 stats:", np.min(a1), np.mean(a1), np.max(a1))
+        print("Sample2 stats:", np.min(a2), np.mean(a2), np.max(a2))
+        print("Result dict:", getattr(test, "result", {}))
+        print("------------------")
+
+    return float(stat), float(pval)

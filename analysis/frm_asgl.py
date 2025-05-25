@@ -1,125 +1,184 @@
+from __future__ import annotations
+import numpy as np, pandas as pd
+from joblib import Parallel, delayed, parallel_backend
+from sklearn.model_selection import TimeSeriesSplit
+from asgl import Regressor
+from tqdm.auto import tqdm
+from common.tqdm_joblib import tqdm_joblib
+from contextlib import nullcontext
+
 """
 frm_asgl.py
 -----------
-Financial Risk Meter (FRM) – FAST version using `asgl`'s adaptive sparse-group
-Lasso quantile regression (cv_lqreg).  Speed-ups vs. scikit implementation:
+Optimized Financial Risk Meter (FRM) via `asgl`'s Regressor + manual CV.
+Supports configurable grid, CV folds, window stepping, and tqdm bars.
 
-    • C++ backend with OpenMP
-    • Built-in K-fold CV path => no Python loop over λ
-    • Optional tqdm bar for large runs
-
-Returns
--------
-dict with keys
-    'frm_index'  : pd.Series   (system-wide mean λ̂_t)
-    'lambda_mat' : pd.DataFrame (dates × tickers λ̂_{i,t})
-    'beta_panel' : dict[date] -> np.ndarray (N×N sparse tail-betas)
+Public API
+----------
+compute_frm(
+    ret_log: pd.DataFrame,
+    window: int,
+    tau: float,
+    n_jobs: int,
+    progress: bool,
+    step: int,
+    lambda_grid: list[float],
+    n_folds: int
+) -> dict
 """
 
-from __future__ import annotations
-import numpy as np, pandas as pd
-from joblib import Parallel, delayed
-from asgl import cv_lqreg          # pip install asgl>=0.4.0
-from tqdm.auto import tqdm
-from common.tqdm_joblib import tqdm_joblib   # tiny helper we created
+# ╔════════════════════════════════════════════════════════════════╗
+# 0. Utility: pinball loss
+# ╚════════════════════════════════════════════════════════════════╝
+def _pinball_loss(y_true: np.ndarray, y_pred: np.ndarray, tau: float) -> float:
+    e = y_true - y_pred
+    return np.maximum(tau * e, (tau - 1) * e).mean()
 
 
-# ╔═══════════════════════════════════════════════════════╗
-# 0. Internal: single asset fit for one window
-# ╚═══════════════════════════════════════════════════════╝
-def _fit_one_asset(y: np.ndarray,
-                   X: np.ndarray,
-                   tau: float = 0.05,
-                   nfolds: int = 3,
-                   nlambda: int = 30) -> tuple[float, np.ndarray]:
+# ╔════════════════════════════════════════════════════════════════╗
+# 1. Fit one asset over one window with manual CV
+# ╚════════════════════════════════════════════════════════════════╝
+def _fit_one_asset(
+    y: np.ndarray,
+    X: np.ndarray,
+    tau: float,
+    lambda_grid: list[float],
+    n_folds: int,
+) -> tuple[float, np.ndarray]:
     """
-    Returns (best_lambda, coeff_vector)
-    coeff_vector length == X.shape[1]  (no self, no intercept)
+    Select best lambda by minimizing out-of-sample pinball loss over CV folds.
+    Returns (best_lambda, best_coef) where coef length = X.shape[1]
     """
-    model = cv_lqreg(
-        X, y, tau=tau,
-        nfolds=nfolds,
-        nlambda=nlambda,
-        family="gaussian",        # returns are continuous
-        parallel=False            # outer joblib already parallelised
-    )
-    lam_best = float(model.lambda_best_)
-    coef = model.coef_           # shape (p,)
-    return lam_best, coef
+    cv = TimeSeriesSplit(n_splits=n_folds)
+    best_lambda, best_loss, best_coef = None, np.inf, None
+
+    for lam in lambda_grid:
+        losses = []
+        for train_idx, test_idx in cv.split(X):
+            model = Regressor(
+                model='qr',
+                penalization='lasso',
+                quantile=tau,
+                lambda1=lam,
+                fit_intercept=True,
+            )
+            model.fit(X[train_idx], y[train_idx])
+            # manual predict to avoid __sklearn_tags__ bug
+            # Extract fitted parameters (robust to attribute naming)
+            # manual predict: guard against None and avoid ambiguous truth-check
+            coef_attr = getattr(model, "coef_", None)
+            coef = coef_attr if coef_attr is not None else getattr(model, "coef", None)
+            intercept_attr = getattr(model, "intercept_", None)
+            intercept = intercept_attr if intercept_attr is not None else getattr(model, "intercept", 0.0)
+            y_hat = X[test_idx].dot(coef) + intercept
+            losses.append(_pinball_loss(y[test_idx], y_hat, tau))
+        avg_loss = np.mean(losses)
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            best_lambda = lam
+            best_coef = model.coef_.copy()
+
+    return best_lambda, best_coef
 
 
-# ╔═══════════════════════════════════════════════════════╗
-# 1. Helper: one FRM snapshot for a given day (rolling window)
-# ╚═══════════════════════════════════════════════════════╝
-def _compute_day(ret_window: pd.DataFrame,
-                 tau: float) -> dict:
+# ╔════════════════════════════════════════════════════════════════╗
+# 2. Compute FRM snapshot for one date
+# ╚════════════════════════════════════════════════════════════════╝
+def _compute_day(
+    ret_window: pd.DataFrame,
+    tau: float,
+    lambda_grid: list[float],
+    n_folds: int,
+) -> dict:
     tickers = ret_window.columns.to_list()
-    Y = ret_window.values              # (W × N)
-    lambdas, betas = {}, {}
+    Y = ret_window.values  # (window × N)
 
+    lambdas, betas = {}, {}
     for i, tgt in enumerate(tickers):
         y = Y[:, i]
         X = np.delete(Y, i, axis=1)
-
-        lam_i, coef_i = _fit_one_asset(y, X, tau=tau)
-        full_beta = np.insert(coef_i, i, 0.0)  # align length to N
-
+        lam_i, coef_i = _fit_one_asset(y, X, tau, lambda_grid, n_folds)
+        full_beta = np.insert(coef_i, i, 0.0)
         lambdas[tgt] = lam_i
-        betas[tgt]   = full_beta
+        betas[tgt] = full_beta
 
-    return dict(date=ret_window.index[-1],
-                lambdas=lambdas,
-                betas=betas)
+    return {'date': ret_window.index[-1], 'lambdas': lambdas, 'betas': betas}
 
 
-# ╔═══════════════════════════════════════════════════════╗
-# 2. Public API
-# ╚═══════════════════════════════════════════════════════╝
-def compute_frm(ret_log: pd.DataFrame,
-                window: int = 63,
-                tau: float = 0.05,
-                n_jobs: int = -1,
-                progress: bool = False) -> dict:
+# ╔════════════════════════════════════════════════════════════════╗
+# 3. Public API
+# ╚════════════════════════════════════════════════════════════════╝
+def compute_frm(
+    ret_log: pd.DataFrame,
+    window: int = 63,
+    tau: float = 0.05,
+    n_jobs: int = -1,
+    progress: bool = False,
+    step: int = 1,
+    lambda_grid: list[float] = None,
+    n_folds: int = 3,
+) -> dict:
     """
+    Compute FRM over `ret_log` with: rolling window, manual CV, and optional skipping.
+
     Parameters
     ----------
-    ret_log : DataFrame  (Date × Ticker, NaN-free)
-    window  : rolling look-back (business days)
-    tau     : tail quantile level
-    n_jobs  : joblib workers
-    progress: if True, show tqdm bar over dates
+    ret_log      : wide DataFrame (dates × tickers) of log-returns (NaN-free)
+    window       : look-back length (days)
+    tau          : tail quantile level
+    n_jobs       : joblib parallel workers
+    progress     : show tqdm bar over windows
+    step         : compute only every `step` days
+    lambda_grid  : list of λ candidates
+    n_folds      : CV splits
 
-    Returns same dict structure as legacy frm.py
+    Returns
+    -------
+    dict containing:
+        frm_index  : pd.Series  (date → mean λ)
+        lambda_mat : pd.DataFrame (dates × tickers)
+        beta_panel : dict[date] → {ticker: coef array}
     """
+
+    # ─── Enforce at least 2 CV splits ─────────────────────
+    if n_folds < 2:
+        print(f"[WARN] n_folds={n_folds} is too small; resetting to 2")
+        n_folds = 2
+    # ────────────────────────────────────────────────────────
+
+    # defaults for grid
+    if lambda_grid is None:
+        # coarse 5-point grid
+        lambda_grid = list(10 ** np.linspace(-3, 1, 5))
+
     ret_log = ret_log.sort_index()
-    end_pos = range(window, len(ret_log) + 1)
+    dates = ret_log.index
+    end_positions = range(window, len(dates) + 1, step)
 
-    # Wrap Parallel in tqdm if requested
-    iterator = end_pos
+    iterator = end_positions
     if progress:
-        iterator = tqdm(end_pos, desc="FRM windows")
+        iterator = tqdm(end_positions, desc='FRM windows')
 
-    with tqdm_joblib(tqdm(iterator)) if progress else nullcontext():
-        results = Parallel(n_jobs=n_jobs, verbose=0)(
-            delayed(_compute_day)(
-                ret_log.iloc[t - window: t], tau
-            ) for t in end_pos
-        )
+    # SERIAL fallback (avoids joblib pickling issues)
+    results = []
+    bar = tqdm(iterator, desc="FRM windows") if progress else iterator
+    for pos in bar:
+        res = _compute_day(
+            ret_log.iloc[pos - window: pos, :],
+            tau, lambda_grid, n_folds
+            )
+        results.append(res)
 
-    # Collect outputs
+    # aggregate
     lambda_rows = []
-    beta_panel  = {}
+    beta_panel = {}
     for r in results:
         lambda_rows.append(pd.Series(r['lambdas'], name=r['date']))
         beta_panel[r['date']] = r['betas']
 
     lambda_df = pd.DataFrame(lambda_rows).sort_index()
-    frm_idx   = lambda_df.mean(axis=1)
+    frm_index = lambda_df.mean(axis=1)
 
-    return dict(frm_index=frm_idx,
-                lambda_mat=lambda_df,
-                beta_panel=beta_panel)
-
-
-# small helper when tqdm disabled
-from contextlib import nullcontext
+    return {'frm_index': frm_index,
+            'lambda_mat': lambda_df,
+            'beta_panel': beta_panel}

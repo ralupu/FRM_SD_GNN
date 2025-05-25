@@ -4,7 +4,7 @@ numpy>=1.26
 openpyxl>=3.1          # Excel loader
 
 # Fast Lasso–quantile regression
-asgl>=0.4.0            # C++/OpenMP backend
+asgl            # C++/OpenMP backend
 
 # Stochastic-dominance tests
 pysdtest==0.0.20        # research-grade SD library
