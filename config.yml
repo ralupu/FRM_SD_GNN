@@ -1,25 +1,31 @@
-# config.yml
-# ----------
-# Global hyper-parameters for the FRM + SD pipeline.
+# FRM_SD_GNN configuration file
 
-# FRM settings
-window_days:   63         # rolling window length for FRM (in days)
-tau:           0.05       # tail quantile for Lasso regression
-step:          5          # step size between windows
-lambda_grid:   [0.001, 0.01, 0.1, 1.0, 10.0]
-n_folds:       2          # CV folds for Lasso penalty selection
-n_jobs:        4          # parallel workers for FRM
+# Data frequency and rolling window
+frequency: monthly          # Options: 'monthly' or 'weekly'
+window: 12                  # Rolling window size (12 months or 52 weeks, etc.)
+step: 1                     # Step size for rolling window
 
-# SD test settings
-block_len:     10         # block length for block-bootstrapping in SD test
-n_boot:        200        # bootstrap replications per pairwise test
-alpha_sd:      0.05       # significance level for dominance edges
-ngrid:         100        # number of grid points for ECDF in SD test
+# Paths to preprocessed data
+returns_path: data/monthly_log_returns.csv   # Or data/weekly_log_returns.csv if freq is weekly
+volumes_path: data/monthly_volumes.csv       # Or data/weekly_volumes.csv if freq is weekly
 
-# Bootstrap-history settings (Step 3b)
-H:             21         # look-back length (days) for synthetic histories
-B:             50         # number of bootstrap-history draws
+# FRM-ASGL quantile regression parameters
+tau: 0.05
+lambda_grid: [0.001, 0.01, 0.1, 1, 10]
 
-# Label creation settings (Step 7)
-horizon:       5          # forecast horizon (days ahead) for FRM-jump label
-jump_quantile: 0.90       # top quantile threshold for defining a 'jump'
+# Bootstrap (set to 0 for scalar SD network, or >0 for stochastic dominance with bootstrapping)
+bootstrap: 0
+
+# Network centrality/factor construction
+centrality_metric: eigenvector    # 'in_degree', 'out_degree', 'pagerank', or 'eigenvector'
+factor_high: 3                   # Number of assets in High-centrality portfolio
+factor_low: 3                    # Number of assets in Low-centrality portfolio
+
+# Output locations
+lambda_outputs: outputs/lambda_estimates.csv
+network_outputs: outputs/networks/               # Directory for network graphs/adjacency
+centrality_outputs: outputs/centralities.csv
+factor_output: outputs/NetworkRisk.csv
+
+# Regression/factor test settings
+regression_window: 60            # Number of rolling periods for factor regressions (optional)

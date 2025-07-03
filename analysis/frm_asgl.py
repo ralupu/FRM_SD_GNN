@@ -34,7 +34,6 @@ def _pinball_loss(y_true: np.ndarray, y_pred: np.ndarray, tau: float) -> float:
     e = y_true - y_pred
     return np.maximum(tau * e, (tau - 1) * e).mean()
 
-
 # ╔════════════════════════════════════════════════════════════════╗
 # 1. Fit one asset over one window with manual CV
 # ╚════════════════════════════════════════════════════════════════╝
@@ -63,9 +62,6 @@ def _fit_one_asset(
                 fit_intercept=True,
             )
             model.fit(X[train_idx], y[train_idx])
-            # manual predict to avoid __sklearn_tags__ bug
-            # Extract fitted parameters (robust to attribute naming)
-            # manual predict: guard against None and avoid ambiguous truth-check
             coef_attr = getattr(model, "coef_", None)
             coef = coef_attr if coef_attr is not None else getattr(model, "coef", None)
             intercept_attr = getattr(model, "intercept_", None)
@@ -80,11 +76,10 @@ def _fit_one_asset(
 
     return best_lambda, best_coef
 
-
 # ╔════════════════════════════════════════════════════════════════╗
-# 2. Compute FRM snapshot for one date
+# 2. Compute FRM snapshot for one period
 # ╚════════════════════════════════════════════════════════════════╝
-def _compute_day(
+def _compute_period(
     ret_window: pd.DataFrame,
     tau: float,
     lambda_grid: list[float],
@@ -92,7 +87,6 @@ def _compute_day(
 ) -> dict:
     tickers = ret_window.columns.to_list()
     Y = ret_window.values  # (window × N)
-
     lambdas, betas = {}, {}
     for i, tgt in enumerate(tickers):
         y = Y[:, i]
@@ -101,16 +95,14 @@ def _compute_day(
         full_beta = np.insert(coef_i, i, 0.0)
         lambdas[tgt] = lam_i
         betas[tgt] = full_beta
-
     return {'date': ret_window.index[-1], 'lambdas': lambdas, 'betas': betas}
-
 
 # ╔════════════════════════════════════════════════════════════════╗
 # 3. Public API
 # ╚════════════════════════════════════════════════════════════════╝
 def compute_frm(
     ret_log: pd.DataFrame,
-    window: int = 63,
+    window: int = 12,
     tau: float = 0.05,
     n_jobs: int = -1,
     progress: bool = False,
@@ -123,12 +115,12 @@ def compute_frm(
 
     Parameters
     ----------
-    ret_log      : wide DataFrame (dates × tickers) of log-returns (NaN-free)
-    window       : look-back length (days)
+    ret_log      : wide DataFrame (dates × tickers) of log-returns (NaN-free, any frequency)
+    window       : look-back length (number of periods: months, weeks, etc.)
     tau          : tail quantile level
-    n_jobs       : joblib parallel workers
+    n_jobs       : joblib parallel workers (currently serial for stability)
     progress     : show tqdm bar over windows
-    step         : compute only every `step` days
+    step         : compute only every `step` periods (e.g., every month)
     lambda_grid  : list of λ candidates
     n_folds      : CV splits
 
@@ -140,15 +132,12 @@ def compute_frm(
         beta_panel : dict[date] → {ticker: coef array}
     """
 
-    # ─── Enforce at least 2 CV splits ─────────────────────
     if n_folds < 2:
         print(f"[WARN] n_folds={n_folds} is too small; resetting to 2")
         n_folds = 2
-    # ────────────────────────────────────────────────────────
 
     # defaults for grid
     if lambda_grid is None:
-        # coarse 5-point grid
         lambda_grid = list(10 ** np.linspace(-3, 1, 5))
 
     ret_log = ret_log.sort_index()
@@ -163,7 +152,7 @@ def compute_frm(
     results = []
     bar = tqdm(iterator, desc="FRM windows") if progress else iterator
     for pos in bar:
-        res = _compute_day(
+        res = _compute_period(
             ret_log.iloc[pos - window: pos, :],
             tau, lambda_grid, n_folds
             )
