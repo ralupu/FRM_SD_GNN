@@ -11,27 +11,12 @@ from datetime import datetime
 
 import pandas as pd
 import yaml
-from sklearn.metrics import roc_auc_score
 
 from analysis import prep
-from analysis.aggregate     import aggregate_to_sector
-from analysis.covar_mes     import load_controls
-from analysis.cov_bootstrap import bootstrap_history
 from analysis.frm_asgl      import compute_frm
-from analysis.sd_utils      import sd_stat_pvalue
 from analysis.sd_network    import dominance_graph_single
-from analysis.features      import compute_graph_centralities, make_feature_panel
-from analysis.evaluate      import (
-    summarize_frm_bootstrap,
-    summarize_sd_centrality_bootstrap,
-    make_labels,
-)
-from analysis.model         import (
-    train_logistic_lasso,
-    eval_logistic,
-    train_var,
-    forecast_var
-)
+from analysis.features      import compute_graph_centralities
+from analysis.factor        import build_HL_factor
 
 def parse_args():
     p = argparse.ArgumentParser(description="FRM/SD pipeline")
@@ -54,7 +39,6 @@ def load_cfg(path: Path) -> dict:
             cfg = {}
     else:
         cfg = {}
-    # Provide minimal defaults, but all main params should be in config.yml now
     return cfg
 
 def main():
@@ -68,33 +52,21 @@ def main():
 
     # Use config-driven file paths for returns/volumes
     returns_file = Path(cfg['returns_path'])
-    volumes_file = Path(cfg.get('volumes_path', ""))
 
     # 1. Load log-returns (monthly or weekly)
     returns = pd.read_csv(returns_file, index_col=0, parse_dates=True)
     print(f"[INFO] Loaded {returns.shape[0]} periods × {returns.shape[1]} assets from {returns_file}")
 
-    # 2. (Optional) Load CoVaR/MES if using (skip if only crypto returns for now)
-    cov_mes = None
-    if 'covar_path' in cfg and 'mes_path' in cfg:
-        cov_mes = load_controls(cfg['covar_path'], cfg['mes_path'])
-        print(f"[INFO] Loaded CoVaR/MES from {cov_mes.index.min()} to {cov_mes.index.max()}")
-
-    # 3. (Optional) Sector aggregation (skip for crypto, but kept for full generality)
-    #if args.level == "sector":
-    #    returns = aggregate_to_sector(returns, meta)
-    #    print(f"[INFO] Aggregated to {returns.shape[1]} sectors")
-
-    # 4. (Optional) Asset subsample
+    # 2. (Optional) Asset subsample
     if args.sample:
         returns = returns.sample(n=args.sample, axis=1, random_state=42)
         print(f"[INFO] Sub-sampled to {returns.shape[1]} assets")
 
-    # 5. Prepare (if you use extra prep: cleaning, imputation, etc.)
+    # 3. Prepare returns for pipeline
     datasets = prep.prepare_all(returns)
     ret_log  = datasets["ret_log"]
 
-    # 6. Compute FRM/λ-matrix
+    # 4. Compute FRM/λ-matrix
     nj = args.n_jobs or cfg.get("n_jobs", 4)
     window = cfg.get("window", 12)
     print(f"[INFO] Computing FRM (window={window}, step={cfg['step']}, freq={cfg['frequency']}) …")
@@ -111,13 +83,38 @@ def main():
     frm_idx         = frm_out["frm_index"]
     full_lambda_mat = frm_out["lambda_mat"]
 
-    # 7. Save λ-matrix & FRM index
+    # 5. Save λ-matrix & FRM index
     full_lambda_mat.to_csv(outputs / "lambda_mat_full.csv")
     frm_idx.to_csv(outputs / "frm_index_full.csv")
     print(f"[INFO] Saved lambda matrix {full_lambda_mat.shape} and FRM index ({len(frm_idx)} rows)")
 
-    # (The rest: SD network, factor, etc. — as per your usual pipeline)
-    # TODO: Insert additional steps for SD network, factor construction, regression as needed.
+    # 6. Build scalar SD networks and extract centralities for each period
+    print(f"[INFO] Building scalar SD networks and extracting centralities …")
+    centralities = []
+    for date, row in full_lambda_mat.iterrows():
+        G = dominance_graph_single(row)  # Scalar network
+        cent = compute_graph_centralities(G)
+        # Flatten: {'metric': {asset: value}} to {'metric_asset': value}
+        flat = {f"{metric}_{asset}": val for metric, asset_dict in cent.items() for asset, val in asset_dict.items()}
+        flat['Date'] = date
+        centralities.append(flat)
+    centrality_df = pd.DataFrame(centralities).set_index('Date')
+    centrality_df.to_csv(outputs / "centralities.csv")
+    print(f"[INFO] Saved SD network centralities ({centrality_df.shape}) to outputs/centralities.csv")
+
+    # 7. Build Network Risk factor (High-Low) and save
+    print(f"[INFO] Building Network Risk factor (High minus Low portfolios) …")
+    from analysis.factor import build_HL_factor
+    factor_series = build_HL_factor(
+        centrality_df=centrality_df,
+        returns_df=returns,
+        metric=cfg["centrality_metric"],
+        top_n=cfg["factor_high"],
+        bottom_n=cfg["factor_low"],
+        out_path=cfg["factor_output"]
+    )
+    print(f"[INFO] Done. Network risk factor shape: {factor_series.shape}")
+
     print(f"[DONE] {datetime.now():%Y-%m-%d %H:%M}")
 
 if __name__ == "__main__":

@@ -2,6 +2,9 @@
 sd_network.py
 -------------
 Construct a directed dominance graph from a single FRM λ‐vector or a bootstrap samples matrix.
+If you pass only scalar λ (one per asset), this function falls back to a simple comparison:
+edge i->j if λ_i > λ_j.
+If you pass bootstrap samples (arrays for each asset), it runs the SD test.
 
 Usage:
     from analysis.sd_network import dominance_graph_single
@@ -65,38 +68,41 @@ def dominance_graph_single(
         # Ensure sample_i is an array for size checks
         arr_i = np.atleast_1d(sample_i)
 
-        for j in range(N):
-            if i == j:
-                continue
-            sample_j = samples[j]
-            arr_j = np.atleast_1d(sample_j)
-
-            # If both are scalars (size=1), fallback to simple comparison
-            if arr_i.size == 1 and arr_j.size == 1:
-                if arr_i.item() > arr_j.item():
+        for i in range(N):
+            sample_i = samples[i]
+            arr_i = np.atleast_1d(sample_i)
+            for j in range(N):
+                if i == j:
+                    continue
+                sample_j = samples[j]
+                arr_j = np.atleast_1d(sample_j)
+                # DIAGNOSTIC
+                if debug:
+                    print(f"Comparing {tickers[i]} (size={arr_i.size}) vs {tickers[j]} (size={arr_j.size})")
+                if arr_i.size == 1 and arr_j.size == 1:
+                    if arr_i.item() > arr_j.item():
+                        G.add_edge(
+                            tickers[i],
+                            tickers[j],
+                            weight=float(arr_i.item() - arr_j.item()),
+                            pvalue=0.0
+                        )
+                    continue
+                # SD mode
+                stat, pval = sd_stat_pvalue(
+                    x=arr_i,
+                    y=arr_j,
+                    s=s,
+                    nboot=nboot,
+                    ngrid=ngrid,
+                    debug=debug
+                )
+                if (stat > 0) and (pval < alpha):
                     G.add_edge(
                         tickers[i],
                         tickers[j],
-                        weight=float(arr_i.item() - arr_j.item()),
-                        pvalue=0.0
+                        weight=float(stat),
+                        pvalue=float(pval)
                     )
-                continue
-
-            # Otherwise run the nonparametric SD test
-            stat, pval = sd_stat_pvalue(
-                x=arr_i,
-                y=arr_j,
-                s=s,
-                nboot=nboot,
-                ngrid=ngrid,
-                debug=debug
-            )
-            if (stat > 0) and (pval < alpha):
-                G.add_edge(
-                    tickers[i],
-                    tickers[j],
-                    weight=float(stat),
-                    pvalue=float(pval)
-                )
 
     return G
