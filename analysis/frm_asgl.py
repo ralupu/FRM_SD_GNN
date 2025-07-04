@@ -176,7 +176,7 @@ def compute_frm(
         beta_panel[r['date']] = r['betas']
 
     lambda_df = pd.DataFrame(lambda_rows).sort_index()
-    frm_index = lambda_df.applymap(lambda x: np.mean(x) if isinstance(x, np.ndarray) else x).mean(axis=1)
+    frm_index = lambda_df.map(lambda x: np.mean(x) if isinstance(x, np.ndarray) else x).mean(axis=1)
 
     return {
         'frm_index': frm_index,

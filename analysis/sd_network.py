@@ -16,7 +16,7 @@ from analysis.sd_utils import sd_stat_pvalue
 
 def dominance_graph_single(
     lambda_vec,
-    s: int = 1,
+    s: int = 2,
     alpha: float = 0.05,
     ngrid: int = 100,
     nboot: int = 200,

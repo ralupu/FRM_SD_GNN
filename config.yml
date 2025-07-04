@@ -14,7 +14,7 @@ tau: 0.05
 lambda_grid: [0.001, 0.01, 0.1, 1, 10]
 
 # Bootstrap (set to 0 for scalar SD network, or >0 for stochastic dominance with bootstrapping)
-bootstrap: 100
+bootstrap: 0
 
 # Network centrality/factor construction
 centrality_metric: eigenvector    # 'indegree', 'outdegree', 'pagerank', or 'eigenvector'

@@ -18,13 +18,19 @@ def build_HL_factor(
         5. Factor = High - Low.
     Includes debugging/logging to diagnose missing values.
     """
-    metric_cols = [c for c in centrality_df.columns if c.endswith("_" + metric)]
+    metric_cols = [c for c in centrality_df.columns if c.endswith("_" + metric) or c.startswith(metric + "_")]
     if not metric_cols:
+        print("Available columns:", centrality_df.columns.tolist())
         raise ValueError(f"No columns found for metric '{metric}' in centrality_df!")
-    periods = centrality_df.index
 
-    metric_matrix = centrality_df[metric_cols].copy()
-    metric_matrix.columns = [c.replace("_" + metric, "") for c in metric_cols]
+    if all(c.endswith("_" + metric) for c in metric_cols):
+        metric_matrix = centrality_df[metric_cols].copy()
+        metric_matrix.columns = [c.replace("_" + metric, "") for c in metric_cols]
+    else:
+        metric_matrix = centrality_df[metric_cols].copy()
+        metric_matrix.columns = [c.replace(metric + "_", "") for c in metric_cols]
+
+    periods = metric_matrix.index
 
     factor_list = []
     for date in periods:
