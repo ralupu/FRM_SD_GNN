@@ -3,4 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="Python 3.12 (FRM_SD_GNN)" />
   </component>
+  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.12 (FRM_SD_GNN) (2)" project-jdk-type="Python SDK" />
 </project>
