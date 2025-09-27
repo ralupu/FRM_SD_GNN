@@ -18,14 +18,24 @@ plt.close()
 
 # ---- 2. NetworkRisk factor over time ----
 networkrisk = pd.read_csv("outputs/NetworkRisk.csv", index_col=0, parse_dates=True).squeeze("columns")
-plt.figure(figsize=(10,4))
-plt.plot(networkrisk)
-plt.title("NetworkRisk Factor (High-Low Spread) Over Time")
-plt.xlabel("Time")
-plt.ylabel("NetworkRisk Factor")
-plt.grid(True)
+
+fig, ax = plt.subplots(figsize=(10, 4))
+ax.plot(networkrisk, color="#4E79A7", linewidth=2.0)
+
+# Keep title + labels
+ax.set_title("NetworkRisk Factor (High-Low Spread) Over Time", fontsize=14, weight="bold")
+ax.set_xlabel("Time", fontsize=12)
+ax.set_ylabel("NetworkRisk Factor", fontsize=12)
+
+# Transparent background
+fig.patch.set_alpha(0.0)
+ax.patch.set_alpha(0.0)
+
+# Remove grid
+ax.grid(False)
+
 plt.tight_layout()
-plt.savefig("outputs/plot_networkrisk_factor.png")
+plt.savefig("outputs/plot_networkrisk_factor.png", dpi=300, transparent=True)
 plt.close()
 
 # ---- 3. Cumulative returns for High/Low centrality portfolios ----
